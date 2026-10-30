@@ -1,5 +1,9 @@
 // Util tanggal minimal untuk BE — padanan perilaku dateUtils FE.
-import { formatISO as formatISODateFns, subDays as subDaysDateFns } from 'date-fns'
+import {
+  addDays as addDaysDateFns,
+  formatISO as formatISODateFns,
+  subDays as subDaysDateFns,
+} from 'date-fns'
 
 export function formatISODate(date: string | Date): string {
   const d = typeof date === 'string' ? new Date(date) : date
@@ -15,6 +19,11 @@ export function todayISO(): string {
 
 export function subDaysISO(days: number): string {
   return formatISODate(subDaysDateFns(new Date(), days))
+}
+
+/** Geser tanggal ISO sebanyak `days` (bisa negatif) — murni pada tanggal, tanpa zona waktu. */
+export function addDaysToISO(date: string, days: number): string {
+  return formatISODate(addDaysDateFns(new Date(`${date}T00:00:00`), days))
 }
 
 export function isValidISODate(value: string): boolean {

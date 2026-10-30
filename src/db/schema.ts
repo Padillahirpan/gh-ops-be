@@ -1,7 +1,7 @@
 // Skema Drizzle (SQLite). Tanggal disimpan sebagai teks ISO (YYYY-MM-DD /
 // ISO datetime) agar identik dengan tipe domain FE — tanpa konversi zona waktu.
 import { sql } from 'drizzle-orm'
-import { index, integer, real, sqliteTable, text } from 'drizzle-orm/sqlite-core'
+import { index, integer, real, sqliteTable, text, uniqueIndex } from 'drizzle-orm/sqlite-core'
 
 export const tandons = sqliteTable('tandons', {
   id: text('id').primaryKey(),
@@ -77,6 +77,77 @@ export const sales = sqliteTable(
   ],
 )
 
+// Batch panen (siklus tanam) — dibuat otomatis saat tanggal semai tandon diisi;
+// jendela biaya = [sowing_date, cycle_end_date] (HSS 0 s.d. sanitasi selesai HSS 47).
+export const cycles = sqliteTable(
+  'cycles',
+  {
+    id: text('id').primaryKey(),
+    tandonId: text('tandon_id')
+      .notNull()
+      .references(() => tandons.id, { onDelete: 'restrict' }),
+    sowingDate: text('sowing_date').notNull(),
+    cycleEndDate: text('cycle_end_date').notNull(),
+    batchCode: text('batch_code').notNull(),
+    createdAt: text('created_at')
+      .notNull()
+      .default(sql`CURRENT_TIMESTAMP`),
+  },
+  (t) => [
+    index('idx_cycles_tandon').on(t.tandonId),
+    uniqueIndex('uq_cycles_tandon_sowing').on(t.tandonId, t.sowingDate),
+  ],
+)
+
+export const COST_TYPES = ['operasional', 'modal'] as const
+export const COST_CATEGORIES_DB = [
+  'benihRockwool',
+  'nutrisi',
+  'pestisida',
+  'listrikAir',
+  'tenagaKerja',
+  'kemasanTransportasi',
+  'peralatanMesin',
+  'perbaikan',
+  'lainLain',
+] as const
+export const COST_TARGETS = ['T1', 'T2', 'T3', 'UMUM'] as const
+
+export const costs = sqliteTable(
+  'costs',
+  {
+    id: text('id').primaryKey(),
+    date: text('date').notNull(),
+    type: text('type', { enum: COST_TYPES }).notNull(),
+    category: text('category', { enum: COST_CATEGORIES_DB }).notNull(),
+    description: text('description').notNull(),
+    amount: integer('amount').notNull(),
+    target: text('target', { enum: COST_TARGETS }).notNull(),
+    supplier: text('supplier'),
+    notes: text('notes'),
+    quantity: real('quantity'),
+    unitPrice: integer('unit_price'),
+    spreadCycles: integer('spread_cycles').notNull().default(1),
+    // Null = dikelompokkan otomatis ke siklus berdasarkan tandon + tanggal;
+    // terisi = penempatan manual ke batch panen tertentu (F-CST-03).
+    cycleId: text('cycle_id').references(() => cycles.id, { onDelete: 'set null' }),
+    createdAt: text('created_at')
+      .notNull()
+      .default(sql`CURRENT_TIMESTAMP`),
+    updatedAt: text('updated_at')
+      .notNull()
+      .default(sql`CURRENT_TIMESTAMP`),
+  },
+  (t) => [
+    index('idx_costs_date').on(t.date),
+    index('idx_costs_target').on(t.target),
+    index('idx_costs_category').on(t.category),
+    index('idx_costs_cycle').on(t.cycleId),
+  ],
+)
+
 export type TandonRow = typeof tandons.$inferSelect
 export type HarvestRow = typeof harvests.$inferSelect
 export type SaleRow = typeof sales.$inferSelect
+export type CycleRow = typeof cycles.$inferSelect
+export type CostRow = typeof costs.$inferSelect

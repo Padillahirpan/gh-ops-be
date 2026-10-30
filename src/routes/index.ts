@@ -3,6 +3,9 @@ import { OpenAPIHono, createRoute } from '@hono/zod-openapi'
 import { z } from 'zod'
 import { openApiValidationHook } from '../middleware/errors.js'
 import { analyticsRoutes } from './analyticsRoutes.js'
+import { costRoutes } from './costRoutes.js'
+import { costingRoutes } from './costingRoutes.js'
+import { cycleRoutes } from './cycleRoutes.js'
 import { harvestRoutes } from './harvestRoutes.js'
 import { saleRoutes } from './saleRoutes.js'
 import { tandonRoutes } from './tandonRoutes.js'
@@ -62,3 +65,6 @@ api.route('/tandons', tandonRoutes)
 api.route('/harvests', harvestRoutes)
 api.route('/sales', saleRoutes)
 api.route('/analytics', analyticsRoutes)
+api.route('/costs', costRoutes)
+api.route('/cycles', cycleRoutes)
+api.route('/costing', costingRoutes)

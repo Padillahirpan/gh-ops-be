@@ -1,6 +1,6 @@
 # Selada Ops API
 
-Backend API untuk **Selada Ops** — aplikasi operasional greenhouse selada hidroponik (sistem NFT/talang). API ini mencakup manajemen tandon (bak tanam), pencatatan panen, penjualan, dan analitik dashboard.
+Backend API untuk **Selada Ops** — aplikasi operasional greenhouse selada hidroponik (sistem NFT/talang). API ini mencakup manajemen tandon (bak tanam), pencatatan panen, penjualan, analitik dashboard, serta modul biaya & modal (costing per batch panen).
 
 Dibangun dengan **Hono + Drizzle ORM + SQLite**, seluruh tipe, konstanta, dan kalkulasi di-port 1:1 dari aplikasi frontend [`selada-ops`](../selada-ops) sehingga kontrak API identik dengan frontend.
 
@@ -50,6 +50,14 @@ Dibangun dengan **Hono + Drizzle ORM + SQLite**, seluruh tipe, konstanta, dan ka
 - Dibandingkan dengan window periode sebelumnya (untuk indikator naik/turun)
 - Tren berat panen, panen vs terjual per tandon, revenue per tandon, distribusi buyer
 
+### Modul Biaya & Modal
+- Pencatatan pengeluaran satu per satu: tanggal, tipe (Operasional / Modal & Aset), 9 kategori, deskripsi, nominal, target (T1/T2/T3 atau Umum), supplier opsional, catatan
+- **Batch panen (siklus)** dibuat otomatis saat tanggal semai tandon diisi; biaya dikelompokkan otomatis ke siklus berdasarkan tandon + tanggal (HSS 0 s.d. sanitasi selesai), dan dapat dipindahkan manual ke batch lain
+- Biaya **Umum** (mis. listrik, tenaga kerja bersama) otomatis dibagi rata ke 3 tandon
+- Pembelian **Modal & Aset** dapat dibebankan penuh ke siklus saat ini atau disebar ke N siklus berikutnya (pilihan per item)
+- Harga satuan & jumlah opsional (nominal dihitung otomatis) agar kenaikan harga terlihat dari waktu ke waktu
+- Perhitungan otomatis per batch + total: biaya/kg, biaya/lubang, laba kotor, margin, dan harga impas — termasuk penanda batch yang harga jual rata-ratanya di bawah harga impas
+
 ## Tech Stack
 
 | Komponen | Teknologi |
@@ -87,12 +95,18 @@ selada-ops-api/
 │   │   ├── tandonRoutes.ts
 │   │   ├── harvestRoutes.ts
 │   │   ├── saleRoutes.ts
-│   │   └── analyticsRoutes.ts
+│   │   ├── analyticsRoutes.ts
+│   │   ├── costRoutes.ts
+│   │   ├── cycleRoutes.ts
+│   │   └── costingRoutes.ts
 │   ├── services/             # Logika bisnis
 │   │   ├── tandonService.ts
 │   │   ├── harvestService.ts
 │   │   ├── saleService.ts
-│   │   └── analyticsService.ts
+│   │   ├── analyticsService.ts
+│   │   ├── cycleService.ts   # Batch panen (siklus) + pengelompokan otomatis
+│   │   ├── costService.ts    # CRUD biaya
+│   │   └── costingService.ts # Rekap biaya per batch + total
 │   └── validation/
 │       └── schemas.ts        # Skema Zod untuk create/update/query
 ├── drizzle/                  # File migrasi SQL (hasil drizzle-kit generate)
@@ -214,6 +228,30 @@ Dokumentasi interaktif tersedia saat server berjalan:
 |---|---|---|
 | `GET` | `/api/analytics/dashboard` | Dashboard agregat. Query: `range` (`30`/`90`/`all`), `tandonId` (`all`/`T1`/`T2`/`T3`) |
 
+### Costs (Biaya)
+
+| Method | Endpoint | Deskripsi |
+|---|---|---|
+| `GET` | `/api/costs` | Riwayat biaya. Filter: `target` (`T1`/`T2`/`T3`/`UMUM`), `type`, `category`, `from`, `to`. Respon menyertakan `assignedCycleId` (hasil pengelompokan) |
+| `POST` | `/api/costs` | Catat biaya. `amount` wajib — atau isi `quantity` + `unitPrice` agar nominal dihitung server-side |
+| `GET` | `/api/costs/{id}` | Detail satu biaya |
+| `PATCH` | `/api/costs/{id}` | Ubah biaya; isi `cycleId` untuk memindahkan batch secara manual, `null` untuk kembali otomatis |
+| `DELETE` | `/api/costs/{id}` | Hapus biaya |
+
+### Cycles (Batch Panen)
+
+| Method | Endpoint | Deskripsi |
+|---|---|---|
+| `GET` | `/api/cycles` | Daftar batch panen (siklus) per tandon. Filter: `tandonId` |
+| `GET` | `/api/cycles/{id}` | Detail satu batch panen |
+
+### Costing (Rekap Biaya)
+
+| Method | Endpoint | Deskripsi |
+|---|---|---|
+| `GET` | `/api/costing/overview` | Ringkasan per batch + total. Query: `tandonId` (`all`/`T1`/`T2`/`T3`). Termasuk `unassignedItems` (biaya di luar jendela siklus) |
+| `GET` | `/api/costing/batches/{cycleId}` | Rincian satu batch: item biaya (porsi Umum/penyebaran modal ditandai), total per kategori, metrik |
+
 ## Domain Bisnis
 
 ### Siklus Tanam 47 Hari
@@ -227,6 +265,31 @@ Dokumentasi interaktif tersedia saat server berjalan:
 | Sanitasi | 46–47 | Pembersihan & persiapan siklus berikutnya |
 
 **Jendela semprot kimia**: diperbolehkan hingga HSS 31, **dilarang mulai HSS 32** (`sprayAllowed: false`) untuk memastikan periode pra-panen bebas residu kimia.
+
+### Modul Biaya & Modal
+
+**Kategori biaya** (`category`): `benihRockwool`, `nutrisi`, `pestisida`, `listrikAir`, `tenagaKerja`, `kemasanTransportasi`, `peralatanMesin`, `perbaikan`, `lainLain`.
+
+**Pengelompokan ke batch panen** (F-CST-03): setiap tandon punya daftar siklus (record `cycles`) dengan jendela `[sowingDate, sowingDate+47]` (HSS 0 s.d. sanitasi selesai). Biaya target tandon otomatis masuk siklus yang memuat tanggalnya; isi `cycleId` untuk memindahkan manual. Panen lama yang tidak tercakup record mana pun disintesis menjadi batch *implisit* (diasumsikan panen HSS 45). Biaya yang tanggalnya jatuh di luar semua jendela ditandai *unassigned* dan tetap tercatat di riwayat.
+
+**Biaya Umum** (F-CST-04): biaya target `UMUM` dibagi rata ke 3 tandon (sisa rupiah diberikan ke porsi terdepan). Tiap porsi dicari-anchorkan ke siklus masing-masing tandon pada tanggal biaya.
+
+**Modal & Aset** (F-CST-05): biaya `type: modal` dengan `spreadCycles: N` membebankan `amount / N` ke N siklus berurutan tandon yang sama mulai dari siklus anchor. Porsi untuk siklus yang belum dibuat akan otomatis muncul begitu siklus berikutnya tercatat. `spreadCycles: 1` (default) = dibebankan penuh ke siklus saat ini.
+
+**Rumus per batch dan total** (F-CST-06, dihitung server-side):
+
+| Metrik | Rumus |
+|---|---|
+| Total Biaya Batch | Σ biaya operasional + porsi biaya modal yang dibebankan |
+| Biaya per kg (Rp/kg) | Total Biaya / Total Panen kg |
+| Biaya per lubang (Rp) | Total Biaya / jumlah lubang tandon (1000) |
+| Laba Kotor (Rp) | Total Revenue − Total Biaya |
+| Margin (%) | Laba Kotor / Total Revenue × 100 |
+| Harga Impas (Rp/kg) | Total Biaya / Total Panen kg |
+
+- *Total Revenue* = Σ `totalValue` penjualan batch berstatus `paid`/`dp` (konsisten dengan analitik)
+- *Harga jual rata-rata* = Σ nilai jual seluruh status / Σ kg terjual (bobot aktual pasar)
+- **Peringatan impas** (F-CST-09): `belowBreakEven: true` bila harga jual rata-rata batch < harga impas; `avgSellingPricePerKg` bernilai `null` bila batch belum punya penjualan
 
 ### Threshold Berat Panen (Badge)
 
@@ -246,6 +309,10 @@ Target berat rata-rata: **200 gram per tanaman**.
 - Volume penjualan tidak boleh melebihi sisa stok batch panen terkait
 - Revenue hanya dihitung dari penjualan berstatus `paid` dan `dp`
 - `totalValue` penjualan dihitung server-side (`soldVolumeKg × pricePerKg`, dibulatkan)
+- Biaya: `quantity` dan `unitPrice` harus diisi bersamaan; `amount` dihitung server-side dari keduanya dan tidak boleh selisih > Rp 1 bila dikirim manual
+- `spreadCycles` > 1 hanya untuk biaya `modal`; biaya `operasional` selalu dibebankan penuh ke satu siklus
+- Biaya target `UMUM` tidak dapat dipatok manual (`cycleId` harus kosong) karena dibagi rata ke 3 tandon
+- `cycleId` manual harus merujuk batch milik tandon yang sama dengan target biaya
 
 ## Format Error
 
@@ -270,25 +337,28 @@ Semua error dikembalikan dalam format terpusat:
 
 ## Skema Database
 
-3 tabel dengan relasi dan constraint:
+5 tabel dengan relasi dan constraint:
 
 ```
 tandons (3 fixed: T1, T2, T3)
    │
    │ 1:N  (ON DELETE restrict)
-   ▼
-harvests
+   ├──────────────► harvests ──1:N (cascade)──► sales
    │
-   │ 1:N  (ON DELETE cascade)
-   ▼
-sales
+   └──────────────► cycles (batch panen/siklus)
+                        │
+                        │ 1:N  (ON DELETE set null)
+                        ▼
+                      costs
 ```
 
 - `tandons` — id, name, greenhouse, batchCode, holes (default 1000), sowingDate, status, color
 - `harvests` — data panen + rejection breakdown, FK ke `tandons`
 - `sales` — data penjualan, FK ke `harvests`
+- `cycles` — batch panen per tandon: tandonId, sowingDate, cycleEndDate (semai+47), batchCode; unik per (tandon, tanggal semai); dibuat otomatis saat tanggal semai diisi
+- `costs` — tanggal, tipe, kategori, deskripsi, nominal, target (`T1`/`T2`/`T3`/`UMUM`), supplier, catatan, quantity, unitPrice, spreadCycles, cycleId (penempatan manual, FK `cycles`)
 - Tanggal disimpan sebagai teks ISO (`YYYY-MM-DD`) agar identik dengan tipe frontend tanpa konversi zona waktu
-- Index pada kolom `tandon_id`, `harvest_id`, dan `date` untuk performa query
+- Index pada kolom `tandon_id`, `harvest_id`, `date`, `target`, `category`, dan `cycle_id` untuk performa query
 
 ## Arsitektur
 

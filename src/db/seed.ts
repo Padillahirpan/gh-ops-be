@@ -2,11 +2,18 @@
 // Idempoten: dilewati jika data sudah ada, kecuali dijalankan dengan --force.
 import { count } from 'drizzle-orm'
 import { calculateAvgWeightG, calculateSuccessRate, calculateTotalValue } from '../lib/calculations.js'
-import { subDaysISO } from '../lib/dateUtils.js'
+import { addDaysToISO, subDaysISO } from '../lib/dateUtils.js'
 import { TANDON_IDS, TANDON_CONFIG } from '../domain/constants.js'
-import type { HarvestRejectionBreakdown, TandonId, TandonStatus } from '../domain/types.js'
+import type {
+  CostCategory,
+  CostTarget,
+  CostType,
+  HarvestRejectionBreakdown,
+  TandonId,
+  TandonStatus,
+} from '../domain/types.js'
 import { db, sqlite } from './client.js'
-import { harvests, sales, tandons } from './schema.js'
+import { costs, cycles, harvests, sales, tandons } from './schema.js'
 import { runMigrations } from './migrate.js'
 
 const force = process.argv.includes('--force')
@@ -107,6 +114,83 @@ const SALE_SEEDS: SaleSeed[] = [
   { id: 'demo-s13', harvestId: 'demo-h6', daysAgo: 17, buyerCategory: 'retail', buyerName: 'Direct Customer (WhatsApp)', soldVolumeKg: 18.6, pricePerKg: 58000, paymentStatus: 'paid', unsoldAction: null, notes: null },
 ]
 
+// Batch panen (siklus): 2 siklus selesai per tandon + siklus berjalan.
+// Tanggal semai siklus selesai = tanggal panen − 45 (HSS 45); siklus dibuat
+// berurutan tanpa tumpang tindih jendela 47 hari.
+interface CycleSeed {
+  id: string
+  tandonId: TandonId
+  sowingDaysAgo: number
+}
+
+const CYCLE_SEEDS: CycleSeed[] = [
+  { id: 'demo-cy-t1-a', tandonId: 'T1', sowingDaysAgo: 137 },
+  { id: 'demo-cy-t1-b', tandonId: 'T1', sowingDaysAgo: 88 },
+  { id: 'demo-cy-t1-c', tandonId: 'T1', sowingDaysAgo: 40 },
+  { id: 'demo-cy-t2-a', tandonId: 'T2', sowingDaysAgo: 123 },
+  { id: 'demo-cy-t2-b', tandonId: 'T2', sowingDaysAgo: 74 },
+  { id: 'demo-cy-t2-c', tandonId: 'T2', sowingDaysAgo: 25 },
+  { id: 'demo-cy-t3-a', tandonId: 'T3', sowingDaysAgo: 109 },
+  { id: 'demo-cy-t3-b', tandonId: 'T3', sowingDaysAgo: 60 },
+  { id: 'demo-cy-t3-c', tandonId: 'T3', sowingDaysAgo: 10 },
+]
+
+interface CostSeed {
+  id: string
+  daysAgo: number
+  type: CostType
+  category: CostCategory
+  description: string
+  target: CostTarget
+  amount?: number
+  quantity?: number
+  unitPrice?: number
+  supplier?: string
+  notes?: string
+  spreadCycles?: number
+}
+
+const COST_SEEDS: CostSeed[] = [
+  // Operasional per siklus — benih & rockwool (harga satuan naik tiap siklus, F-CST-08)
+  { id: 'demo-c01', daysAgo: 137, type: 'operasional', category: 'benihRockwool', description: 'Benih & rockwool siklus T1', target: 'T1', quantity: 1000, unitPrice: 750, supplier: 'HydroSeed Store' },
+  { id: 'demo-c02', daysAgo: 123, type: 'operasional', category: 'benihRockwool', description: 'Benih & rockwool siklus T2', target: 'T2', quantity: 1000, unitPrice: 750, supplier: 'HydroSeed Store' },
+  { id: 'demo-c03', daysAgo: 109, type: 'operasional', category: 'benihRockwool', description: 'Benih & rockwool siklus T3', target: 'T3', quantity: 1000, unitPrice: 750, supplier: 'HydroSeed Store' },
+  { id: 'demo-c08', daysAgo: 88, type: 'operasional', category: 'benihRockwool', description: 'Benih & rockwool siklus T1 (batch 2)', target: 'T1', quantity: 1000, unitPrice: 780, supplier: 'HydroSeed Store' },
+  { id: 'demo-c10', daysAgo: 74, type: 'operasional', category: 'benihRockwool', description: 'Benih & rockwool siklus T2 (batch 2)', target: 'T2', quantity: 1000, unitPrice: 780, supplier: 'HydroSeed Store' },
+  { id: 'demo-c13', daysAgo: 60, type: 'operasional', category: 'benihRockwool', description: 'Benih & rockwool siklus T3 (batch 2)', target: 'T3', quantity: 1000, unitPrice: 800, supplier: 'HydroSeed Store' },
+  { id: 'demo-c30', daysAgo: 6, type: 'operasional', category: 'benihRockwool', description: 'Benih & rockwool siklus berjalan T3', target: 'T3', quantity: 1000, unitPrice: 820, supplier: 'HydroSeed Store' },
+  // Nutrisi (harga satuan naik dari waktu ke waktu)
+  { id: 'demo-c07', daysAgo: 110, type: 'operasional', category: 'nutrisi', description: 'Nutrisi AB Mix', target: 'T1', quantity: 8, unitPrice: 85000, supplier: 'AgroNutrien' },
+  { id: 'demo-c11', daysAgo: 74, type: 'operasional', category: 'nutrisi', description: 'Nutrisi AB Mix', target: 'T2', quantity: 8, unitPrice: 90000, supplier: 'AgroNutrien' },
+  { id: 'demo-c19', daysAgo: 50, type: 'operasional', category: 'nutrisi', description: 'Nutrisi AB Mix', target: 'T1', quantity: 8, unitPrice: 95000, supplier: 'AgroNutrien' },
+  { id: 'demo-c22', daysAgo: 45, type: 'operasional', category: 'nutrisi', description: 'Nutrisi tambahan (cuaca panas)', target: 'T2', amount: 600000 },
+  { id: 'demo-c28', daysAgo: 3, type: 'operasional', category: 'nutrisi', description: 'Nutrisi awal siklus berjalan T1', target: 'T1', quantity: 8, unitPrice: 87500, supplier: 'AgroNutrien' },
+  { id: 'demo-c31', daysAgo: 20, type: 'operasional', category: 'nutrisi', description: 'Nutrisi awal siklus berjalan T2', target: 'T2', quantity: 8, unitPrice: 92500, supplier: 'AgroNutrien' },
+  // Pestisida
+  { id: 'demo-c09', daysAgo: 85, type: 'operasional', category: 'pestisida', description: 'Pestisida hayati 2 botol', target: 'T1', quantity: 2, unitPrice: 120000, supplier: 'Tani Sehat' },
+  { id: 'demo-c15', daysAgo: 60, type: 'operasional', category: 'pestisida', description: 'Pestisida hayati', target: 'T3', quantity: 2, unitPrice: 130000, supplier: 'Tani Sehat' },
+  // Biaya Umum — dibagi rata ke 3 tandon (F-CST-04)
+  { id: 'demo-c05', daysAgo: 105, type: 'operasional', category: 'listrikAir', description: 'Token listrik & air GH', target: 'UMUM', amount: 900000 },
+  { id: 'demo-c06', daysAgo: 100, type: 'operasional', category: 'tenagaKerja', description: 'Upah buruh tanam & perawatan', target: 'UMUM', amount: 1500000 },
+  { id: 'demo-c17', daysAgo: 55, type: 'operasional', category: 'listrikAir', description: 'Token listrik & air GH', target: 'UMUM', amount: 950000 },
+  { id: 'demo-c18', daysAgo: 55, type: 'operasional', category: 'tenagaKerja', description: 'Upah buruh panen', target: 'UMUM', amount: 1200000 },
+  { id: 'demo-c27', daysAgo: 5, type: 'operasional', category: 'listrikAir', description: 'Token listrik & air GH', target: 'UMUM', amount: 1000000 },
+  // Kemasan & transportasi (saat panen)
+  { id: 'demo-c14', daysAgo: 58, type: 'operasional', category: 'kemasanTransportasi', description: 'Box kemasan & ongkir panen', target: 'T3', amount: 350000 },
+  { id: 'demo-c20', daysAgo: 48, type: 'operasional', category: 'kemasanTransportasi', description: 'Box kemasan & ongkir panen', target: 'T1', amount: 320000 },
+  { id: 'demo-c24', daysAgo: 36, type: 'operasional', category: 'kemasanTransportasi', description: 'Box kemasan & ongkir panen', target: 'T2', amount: 300000 },
+  { id: 'demo-c26', daysAgo: 22, type: 'operasional', category: 'kemasanTransportasi', description: 'Box kemasan & ongkir panen', target: 'T3', amount: 300000 },
+  // Perbaikan & tak terduga
+  { id: 'demo-c12', daysAgo: 70, type: 'operasional', category: 'perbaikan', description: 'Ganti seal pompa talang', target: 'T1', amount: 350000 },
+  { id: 'demo-c16', daysAgo: 60, type: 'operasional', category: 'perbaikan', description: 'Perbaikan instalasi listrik GH-2', target: 'T2', amount: 1200000 },
+  { id: 'demo-c23', daysAgo: 40, type: 'operasional', category: 'perbaikan', description: 'Ganti talang rusak zona A', target: 'T2', amount: 800000 },
+  { id: 'demo-c25', daysAgo: 26, type: 'operasional', category: 'perbaikan', description: 'Servis kipas GH-2 (jatuh di luar siklus)', target: 'T2', amount: 150000, notes: 'Tanggal di antara dua siklus — contoh biaya tak terkelompok' },
+  { id: 'demo-c29', daysAgo: 8, type: 'operasional', category: 'lainLain', description: 'Tak terduga: ganti seal pipa', target: 'T3', amount: 150000 },
+  // Modal & Aset (F-CST-05)
+  { id: 'demo-c04', daysAgo: 130, type: 'modal', category: 'peralatanMesin', description: 'Pompa nutrisi baru', target: 'T1', amount: 4500000, supplier: 'Toko Hidro Jaya', spreadCycles: 3, notes: 'Disebar ke 3 siklus T1' },
+  { id: 'demo-c21', daysAgo: 47, type: 'modal', category: 'peralatanMesin', description: 'Timbangan digital', target: 'T3', amount: 1200000, supplier: 'Toko Hidro Jaya' },
+]
+
 await runMigrations()
 
 const existing = db.select({ value: count() }).from(harvests).get()
@@ -117,11 +201,27 @@ if (existing && existing.value > 0 && !force) {
 }
 
 db.transaction(() => {
+  db.delete(costs).run()
+  db.delete(cycles).run()
   db.delete(sales).run()
   db.delete(harvests).run()
   db.delete(tandons).run()
 
   db.insert(tandons).values(buildTandonRows()).run()
+
+  db.insert(cycles).values(
+    CYCLE_SEEDS.map((c) => {
+      const sowingDate = subDaysISO(c.sowingDaysAgo)
+      return {
+        id: c.id,
+        tandonId: c.tandonId,
+        sowingDate,
+        cycleEndDate: addDaysToISO(sowingDate, 47),
+        batchCode: `${c.tandonId}-${sowingDate}`,
+        createdAt: `${sowingDate}T07:00:00.000Z`,
+      }
+    }),
+  ).run()
 
   const harvestIdToTandon = new Map(HARVEST_SEEDS.map((h) => [h.id, h.tandonId]))
 
@@ -162,10 +262,36 @@ db.transaction(() => {
       createdAt: `${subDaysISO(s.daysAgo)}T10:00:00.000Z`,
     })),
   ).run()
+
+  db.insert(costs).values(
+    COST_SEEDS.map((c) => {
+      const date = subDaysISO(c.daysAgo)
+      const amount =
+        c.amount ?? Math.round((c.quantity ?? 0) * (c.unitPrice ?? 0))
+      return {
+        id: c.id,
+        date,
+        type: c.type,
+        category: c.category,
+        description: c.description,
+        amount,
+        target: c.target,
+        supplier: c.supplier ?? null,
+        notes: c.notes ?? null,
+        quantity: c.quantity ?? null,
+        unitPrice: c.unitPrice ?? null,
+        spreadCycles: c.type === 'modal' ? (c.spreadCycles ?? 1) : 1,
+        cycleId: null,
+        createdAt: `${date}T09:00:00.000Z`,
+        updatedAt: `${date}T09:00:00.000Z`,
+      }
+    }),
+  ).run()
 })
 
 console.log(
-  `✓ Seed selesai: ${TANDON_IDS.length} tandon, ${HARVEST_SEEDS.length} panen, ${SALE_SEEDS.length} penjualan.`,
+  `✓ Seed selesai: ${TANDON_IDS.length} tandon, ${CYCLE_SEEDS.length} siklus, ` +
+    `${HARVEST_SEEDS.length} panen, ${SALE_SEEDS.length} penjualan, ${COST_SEEDS.length} biaya.`,
 )
 sqlite.close()
 process.exit(0)

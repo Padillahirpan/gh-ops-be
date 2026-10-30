@@ -1,6 +1,7 @@
 // Port dari selada-ops/src/constants — warna tandon memakai hex (API konsumen
 // non-CSS), selaras resolveTandonColor() di FE dashboardData.ts.
 import type {
+  CostCategory,
   CycleEventTone,
   CycleEventType,
   CyclePhase,
@@ -100,6 +101,22 @@ export const CYCLE_PHASE_RANGES: Array<{
   { phase: 'Panen', startHss: 45, endHss: 45 },
   { phase: 'Sanitasi', startHss: 46, endHss: 47 },
 ]
+
+// ---- Modul Biaya & Modal (F-CST-02) ----
+
+export const COST_CATEGORIES: Array<{ value: CostCategory; label: string }> = [
+  { value: 'benihRockwool', label: 'Benih & Rockwool' },
+  { value: 'nutrisi', label: 'Nutrisi' },
+  { value: 'pestisida', label: 'Pestisida' },
+  { value: 'listrikAir', label: 'Listrik & Air' },
+  { value: 'tenagaKerja', label: 'Tenaga Kerja' },
+  { value: 'kemasanTransportasi', label: 'Kemasan & Transportasi' },
+  { value: 'peralatanMesin', label: 'Peralatan & Mesin' },
+  { value: 'perbaikan', label: 'Perbaikan' },
+  { value: 'lainLain', label: 'Lain-lain (tak terduga)' },
+]
+
+export const MAX_MODAL_SPREAD_CYCLES = 24
 
 export const TARGET_AVG_WEIGHT_G = 200
 

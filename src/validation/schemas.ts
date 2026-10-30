@@ -106,6 +106,133 @@ export const harvestQuerySchema = z.object({
   to: isoDateSchema.optional(),
 })
 
+// ---- Modul Biaya & Modal ----
+
+export const costTypeSchema = z.enum(['operasional', 'modal'], {
+  errorMap: () => ({ message: 'Tipe biaya harus operasional atau modal' }),
+})
+
+export const costCategorySchema = z.enum(
+  [
+    'benihRockwool',
+    'nutrisi',
+    'pestisida',
+    'listrikAir',
+    'tenagaKerja',
+    'kemasanTransportasi',
+    'peralatanMesin',
+    'perbaikan',
+    'lainLain',
+  ],
+  { errorMap: () => ({ message: 'Kategori biaya tidak valid' }) },
+)
+
+export const costTargetSchema = z.enum(['T1', 'T2', 'T3', 'UMUM'], {
+  errorMap: () => ({ message: 'Untuk harus salah satu dari T1, T2, T3, atau UMUM' }),
+})
+
+const quantityField = z
+  .number({ invalid_type_error: 'Jumlah harus berupa angka' })
+  .positive('Jumlah harus lebih dari 0')
+  .nullable()
+  .optional()
+
+const unitPriceField = z
+  .number({ invalid_type_error: 'Harga satuan harus berupa angka' })
+  .int('Harga satuan harus bilangan bulat Rupiah')
+  .positive('Harga satuan harus lebih dari 0')
+  .nullable()
+  .optional()
+
+const spreadCyclesField = z
+  .number({ invalid_type_error: 'Penyebaran siklus harus berupa angka' })
+  .int('Penyebaran siklus harus bilangan bulat')
+  .min(1, 'Penyebaran siklus minimal 1 (penuh ke siklus saat ini)')
+  .max(24, 'Penyebaran siklus maksimal 24')
+  .optional()
+
+const costBaseFields = {
+  date: isoDateSchema.optional(),
+  type: costTypeSchema.optional(),
+  category: costCategorySchema.optional(),
+  description: z.string().trim().min(1, 'Deskripsi wajib diisi').max(300, 'Deskripsi maksimal 300 karakter').optional(),
+  amount: z
+    .number({ invalid_type_error: 'Nominal harus berupa angka' })
+    .int('Nominal harus bilangan bulat Rupiah')
+    .positive('Nominal harus lebih dari 0')
+    .optional(),
+  target: costTargetSchema.optional(),
+  supplier: z.string().trim().max(120, 'Nama supplier maksimal 120 karakter').nullable().optional(),
+  notes: z.string().max(500, 'Catatan maksimal 500 karakter').nullable().optional(),
+  quantity: quantityField,
+  unitPrice: unitPriceField,
+  spreadCycles: spreadCyclesField,
+  cycleId: z.string().min(1).nullable().optional(),
+}
+
+// Refinemen lintas field ditulis inline pada tiap .refine() agar parameter `d`
+// ter-type kontekstual dari skema (kompatibel dengan exactOptionalPropertyTypes).
+export const costCreateSchema = z
+  .object({
+    ...costBaseFields,
+    date: isoDateSchema,
+    type: costTypeSchema,
+    category: costCategorySchema,
+    description: z.string().trim().min(1, 'Deskripsi wajib diisi').max(300, 'Deskripsi maksimal 300 karakter'),
+    target: costTargetSchema,
+  })
+  .refine((d) => d.amount !== undefined || (d.quantity != null && d.unitPrice != null), {
+    message: 'Nominal wajib diisi (atau isi jumlah + harga satuan agar nominal dihitung otomatis)',
+    path: ['amount'],
+  })
+  .refine((d) => (d.quantity == null) === (d.unitPrice == null), {
+    message: 'Jumlah dan harga satuan harus diisi (atau dikosongkan) bersamaan',
+    path: ['quantity'],
+  })
+  .refine(
+    (d) =>
+      !(
+        d.amount !== undefined &&
+        d.quantity != null &&
+        d.unitPrice != null &&
+        Math.abs(d.amount - d.quantity * d.unitPrice) > 1
+      ),
+    {
+      message: 'Nominal tidak cocok dengan jumlah × harga satuan',
+      path: ['amount'],
+    },
+  )
+  .refine((d) => !(d.type === 'operasional' && d.spreadCycles !== undefined && d.spreadCycles > 1), {
+    message: 'Penyebaran siklus hanya berlaku untuk biaya Modal & Aset',
+    path: ['spreadCycles'],
+  })
+  .refine((d) => !(d.target === 'UMUM' && d.cycleId != null), {
+    message: 'Biaya Umum dibagi rata ke tandon dan tidak dapat dipatok manual ke satu siklus',
+    path: ['cycleId'],
+  })
+
+export const costUpdateSchema = z
+  .object(costBaseFields)
+  .refine((d) => Object.values(d).some((v) => v !== undefined), {
+    message: 'Minimal satu field harus diisi',
+  })
+
+export const costQuerySchema = z.object({
+  target: costTargetSchema.optional(),
+  type: costTypeSchema.optional(),
+  category: costCategorySchema.optional(),
+  from: isoDateSchema.optional(),
+  to: isoDateSchema.optional(),
+})
+
+export const cycleQuerySchema = z.object({
+  tandonId: tandonIdSchema.optional(),
+})
+
+export const costingQuerySchema = z.object({
+  tandonId: z.enum(['all', 'T1', 'T2', 'T3']).default('all'),
+})
+
 export const saleQuerySchema = harvestQuerySchema.extend({
   buyerCategory: z.enum(['supermarket', 'restaurant', 'wholesaler', 'retail']).optional(),
   paymentStatus: z.enum(['paid', 'dp', 'tempo']).optional(),
@@ -125,3 +252,8 @@ export type HarvestQuery = z.infer<typeof harvestQuerySchema>
 export type SaleQuery = z.infer<typeof saleQuerySchema>
 export type DashboardQuery = z.infer<typeof dashboardQuerySchema>
 export type RejectionBreakdownInput = HarvestRejectionBreakdown
+export type CostCreateInput = z.infer<typeof costCreateSchema>
+export type CostUpdateInput = z.infer<typeof costUpdateSchema>
+export type CostQuery = z.infer<typeof costQuerySchema>
+export type CycleQuery = z.infer<typeof cycleQuerySchema>
+export type CostingQuery = z.infer<typeof costingQuerySchema>

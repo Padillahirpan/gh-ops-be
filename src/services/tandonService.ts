@@ -13,6 +13,7 @@ import {
   isChemicalSprayAllowed,
 } from '../lib/cycleCalculator.js'
 import { NotFoundError } from '../middleware/errors.js'
+import { ensureCycle } from './cycleService.js'
 import type { TandonUpdateInput } from '../validation/schemas.js'
 
 function toDomain(row: TandonRow): Tandon {
@@ -71,6 +72,11 @@ export function updateTandon(id: TandonId, input: TandonUpdateInput): Tandon {
   }
 
   db.update(tandons).set({ sowingDate, status }).where(eq(tandons.id, id)).run()
+
+  // Side effect Modul Biaya: tanggal semai terisi → record batch panen (siklus)
+  // dibuat otomatis agar biaya HSS 0–47 terkelompok ke batch yang benar (F-CST-03).
+  if (sowingDate !== null) ensureCycle(id, sowingDate)
+
   return getTandon(id)
 }
 

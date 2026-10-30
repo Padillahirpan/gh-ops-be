@@ -8,6 +8,13 @@
       "when": 1787291474110,
       "tag": "0000_watery_silver_fox",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "6",
+      "when": 1793334288103,
+      "tag": "0001_massive_wind_dancer",
+      "breakpoints": true
     }
   ]
 }
