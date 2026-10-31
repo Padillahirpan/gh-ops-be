@@ -129,7 +129,15 @@ selada-ops-api/
 npm install
 ```
 
-### 2. Jalankan server development
+### 2. Buat Admin pertama (wajib untuk bisa login)
+
+```bash
+npm run admin:create
+```
+
+Skrip idempoten — set di `.env`: `ADMIN_EMAIL`, `ADMIN_NAME`, `ADMIN_PASSWORD` (default dev: `admin@selada.local` / `selada-admin-123`, **wajib diganti di produksi**). User lain dibuat Admin lewat aplikasi (Settings → Manajemen User); tidak ada pendaftaran mandiri.
+
+### 3. Jalankan server development
 
 ```bash
 npm run dev
@@ -137,7 +145,7 @@ npm run dev
 
 Server berjalan di `http://localhost:3001`. Migrasi database **berjalan otomatis** saat server start, jadi tidak ada langkah migrasi manual yang wajib.
 
-### 3. (Opsional) Isi data demo
+### 4. (Opsional) Isi data demo
 
 ```bash
 npm run db:seed
@@ -145,12 +153,24 @@ npm run db:seed
 
 Seed bersifat idempoten — dilewati jika data sudah ada. Gunakan `npm run db:reseed` untuk reset total dan isi ulang data demo.
 
-### 4. (Alternatif) Build & jalankan untuk produksi
+### 5. (Alternatif) Build & jalankan untuk produksi
 
 ```bash
 npm run build
 npm start
 ```
+
+## Autentikasi & Role
+
+Menggunakan **Better Auth** (session cookie HttpOnly, self-hosted di SQLite yang sama):
+
+- Endpoint auth: `/api/auth/*` (sign-in email/password, sign-out, get-session, admin user management)
+- **Semua endpoint bisnis butuh login** → tanpa session cookie: `401 UNAUTHORIZED` (kecuali `/api/health`, `/api/doc`, `/api/scalar`)
+- **Role** (plugin admin):
+  - `admin` — akses penuh (GET + tulis: POST/PATCH/PUT/DELETE)
+  - `user` — **lihat-saja**: semua metode tulis ditolak `403 FORBIDDEN`
+- Password di-hash scrypt; session token di-hash SHA-256 di DB (revoke = hapus baris); rate limit 20 request/menit/IP (storage database); session 7 hari + rolling refresh + cookie cache 5 menit
+- FE memanggil via proxy same-origin (Vite `/api` → 3001) sehingga cookie berlaku tanpa konfigurasi HTTPS khusus
 
 ## Environment Variables
 
@@ -160,7 +180,12 @@ Tidak ada file `.env` yang wajib — semua variabel punya nilai default. Buat fi
 |---|---|---|
 | `PORT` | `3001` | Port server API |
 | `DB_PATH` | `data/selada-ops.db` | Path file SQLite (folder dibuat otomatis) |
-| `CORS_ORIGIN` | `http://localhost:5173` | Origin yang diizinkan CORS. Pisahkan dengan koma untuk multiple origin, misal: `http://localhost:5173,https://selada.example.com` |
+| `CORS_ORIGIN` | `http://localhost:5173` | Origin yang diizinkan CORS + trustedOrigins auth. Pisahkan dengan koma untuk multiple origin |
+| `BETTER_AUTH_SECRET` | *(fallback dev + warning)* | **Wajib di produksi** — secret acak (mis. `openssl rand -base64 32`) untuk signing session |
+| `BETTER_AUTH_URL` | `http://localhost:3001` | Base URL layanan auth |
+| `ADMIN_EMAIL` | `admin@selada.local` | Dipakai `npm run admin:create` |
+| `ADMIN_NAME` | `Admin` | Dipakai `npm run admin:create` |
+| `ADMIN_PASSWORD` | `selada-admin-123` | Dipakai `npm run admin:create` — **wajib diganti** |
 
 ## Perintah npm
 
@@ -174,6 +199,7 @@ Tidak ada file `.env` yang wajib — semua variabel punya nilai default. Buat fi
 | `npm run db:migrate` | Jalankan migrasi secara manual |
 | `npm run db:seed` | Isi data demo (dilewati jika data sudah ada) |
 | `npm run db:reseed` | Reset total + isi ulang data demo |
+| `npm run admin:create` | Buat/perbarui Admin pertama (idempoten) |
 
 ## Dokumentasi API
 
@@ -190,6 +216,18 @@ Dokumentasi interaktif tersedia saat server berjalan:
 | Method | Endpoint | Deskripsi |
 |---|---|---|
 | `GET` | `/api/health` | Status layanan, uptime, timestamp |
+
+### Auth (Better Auth)
+
+| Method | Endpoint | Deskripsi |
+|---|---|---|
+| `POST` | `/api/auth/sign-in/email` | Login email + password → set cookie session HttpOnly |
+| `POST` | `/api/auth/sign-out` | Hapus session (revoke) |
+| `GET` | `/api/auth/get-session` | Session aktif + data user (null bila belum login) |
+| `POST` | `/api/auth/admin/create-user` | *(admin)* Buat user baru (name, email, password, role) |
+| `GET` | `/api/auth/admin/list-users` | *(admin)* Daftar user |
+| `POST` | `/api/auth/admin/set-role` | *(admin)* Ubah role user |
+| `POST` | `/api/auth/admin/remove-user` | *(admin)* Hapus user |
 
 ### Tandons
 
@@ -357,7 +395,8 @@ tandons (3 fixed: T1, T2, T3)
 - `sales` — data penjualan, FK ke `harvests`
 - `cycles` — batch panen per tandon: tandonId, sowingDate, cycleEndDate (semai+47), batchCode; unik per (tandon, tanggal semai); dibuat otomatis saat tanggal semai diisi
 - `costs` — tanggal, tipe, kategori, deskripsi, nominal, target (`T1`/`T2`/`T3`/`UMUM`), supplier, catatan, quantity, unitPrice, spreadCycles, cycleId (penempatan manual, FK `cycles`)
-- Tanggal disimpan sebagai teks ISO (`YYYY-MM-DD`) agar identik dengan tipe frontend tanpa konversi zona waktu
+- Tabel auth (Better Auth): `user` (termasuk `role` admin/user, `banned`), `session`, `account` (kredensial), `verification`, `rateLimit` — kolom tanggal epoch ms integer (berbeda dari tabel bisnis)
+- Tanggal tabel bisnis disimpan sebagai teks ISO (`YYYY-MM-DD`) agar identik dengan tipe frontend tanpa konversi zona waktu
 - Index pada kolom `tandon_id`, `harvest_id`, `date`, `target`, `category`, dan `cycle_id` untuk performa query
 
 ## Arsitektur

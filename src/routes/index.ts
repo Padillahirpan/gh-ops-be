@@ -1,6 +1,7 @@
 import { Scalar } from '@scalar/hono-api-reference'
 import { OpenAPIHono, createRoute } from '@hono/zod-openapi'
 import { z } from 'zod'
+import { requireAdmin, requireAuth, type AuthEnv } from '../middleware/auth.js'
 import { openApiValidationHook } from '../middleware/errors.js'
 import { analyticsRoutes } from './analyticsRoutes.js'
 import { costRoutes } from './costRoutes.js'
@@ -10,7 +11,7 @@ import { harvestRoutes } from './harvestRoutes.js'
 import { saleRoutes } from './saleRoutes.js'
 import { tandonRoutes } from './tandonRoutes.js'
 
-export const api = new OpenAPIHono({ defaultHook: openApiValidationHook })
+export const api = new OpenAPIHono<AuthEnv>({ defaultHook: openApiValidationHook })
 
 const healthRoute = createRoute({
   method: 'get',
@@ -60,6 +61,11 @@ api.doc('/doc', {
 })
 
 api.get('/scalar', Scalar({ url: '/api/doc', pageTitle: 'Selada Ops API' }))
+
+// Guard: semua endpoint bisnis butuh login; metode tulis hanya Admin.
+// /health, /doc, /scalar terdaftar di atas sehingga tetap publik.
+api.use('*', requireAuth)
+api.use('*', requireAdmin)
 
 api.route('/tandons', tandonRoutes)
 api.route('/harvests', harvestRoutes)
